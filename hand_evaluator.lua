@@ -231,12 +231,14 @@ HandEvaluator.calculateScore = function(playedCards, activeJokers)
                 else
                     print("Warning: Joker '" .. joker.name .. "' has invalid value for score_multiplier: " .. tostring(joker.value))
                 end
+            elseif joker.effectType == "flat_score_bonus" then
+                if joker.value and type(joker.value) == "number" then
+                    currentScore = currentScore + joker.value
+                    print("Applied joker '" .. joker.name .. "': flat score bonus of " .. joker.value)
+                else
+                    print("Warning: Joker '" .. joker.name .. "' has invalid value for flat_score_bonus: " .. tostring(joker.value))
+                end
             end
-            -- Other effect types like 'flat_bonus' could be handled here with 'elseif'
-            -- elseif joker.effectType == "flat_bonus" then
-            --     currentScore = currentScore + joker.value
-            --     print("Applied joker '" .. joker.name .. "': flat bonus of " .. joker.value)
-            -- end
         end
     end
 
