@@ -42,25 +42,25 @@ end
 HandEvaluator.isPair = function(cards)
     if #cards ~= 5 then return false end -- Assuming 5 card evaluation for now
     local rankCounts = HandEvaluator.getRankCounts(cards)
-    local pairs = 0
-    for rank, count in pairs(rankCounts) do
+    local pairCount = 0 -- Renamed from 'pairs'
+    for rank, count in pairs(rankCounts) do -- 'pairs' here is the global iterator
         if count == 2 then
-            pairs = pairs + 1
+            pairCount = pairCount + 1
         end
     end
-    return pairs == 1
+    return pairCount == 1
 end
 
 HandEvaluator.isTwoPair = function(cards)
     if #cards ~= 5 then return false end
     local rankCounts = HandEvaluator.getRankCounts(cards)
-    local pairs = 0
-    for rank, count in pairs(rankCounts) do
+    local pairCount = 0 -- Renamed from 'pairs'
+    for rank, count in pairs(rankCounts) do -- 'pairs' here is the global iterator
         if count == 2 then
-            pairs = pairs + 1
+            pairCount = pairCount + 1
         end
     end
-    return pairs == 2
+    return pairCount == 2
 end
 
 HandEvaluator.isThreeOfAKind = function(cards)
