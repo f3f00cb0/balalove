@@ -57,4 +57,15 @@ function Hand:getCount()
     return #self.cards
 end
 
+-- Removes a card by its 1-based index in the hand's internal cards table.
+-- Returns the removed card object, or nil if index is invalid.
+function Hand:removeCardByIndex(indexToRemove)
+    if type(indexToRemove) ~= "number" or indexToRemove < 1 or indexToRemove > #self.cards then
+        print("Warning: Invalid index for removeCardByIndex: " .. tostring(indexToRemove))
+        return nil
+    end
+    local card = table.remove(self.cards, indexToRemove)
+    return card
+end
+
 return Hand

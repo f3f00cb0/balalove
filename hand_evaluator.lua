@@ -291,6 +291,7 @@ HandEvaluator.calculateScore = function(playedCards, activeJokers)
             --        currentScore = currentScore * joker.value
             --        table.insert(activatedJokerNames, joker.name .. " (x" .. joker.value .. " for small hand)")
             --    end
+
         end
     end
 
