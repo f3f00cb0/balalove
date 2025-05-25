@@ -12,10 +12,10 @@ suitColors = {
 
 -- Suit symbols for drawing
 suitSymbols = {
-    Hearts = "♥", -- U+2665
+    Hearts = "♥",   -- U+2665
     Diamonds = "♦", -- U+2666
-    Clubs = "♣", -- U+2663
-    Spades = "♠"  -- U+2660
+    Clubs = "♣",    -- U+2663
+    Spades = "♠"    -- U+2660
 }
 
 -- Store the default font and a potentially larger one for symbols
@@ -24,7 +24,6 @@ local symbolFont = nil
 
 -- Function to draw a card placeholder
 function drawCardPlaceholder(x, y, suit, rank)
-
     local cardBackgroundColor = {0.95, 0.95, 0.94} -- Very light grey / off-white
     local borderColor = {0.3, 0.3, 0.3} -- Darker grey for border
     local innerBorderColor = {0.7, 0.7, 0.7} -- Lighter grey for inner accent
