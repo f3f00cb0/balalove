@@ -208,7 +208,7 @@ HandEvaluator.handBaseScores = {
     ["No cards"] = 0 -- Handle empty hand
 }
 
-HandEvaluator.calculateScore = function(playedCards, activeJokers)
+HandEvaluator.calculateScore = function(playedCards, activeJokers, currentRoundNumber) -- Added currentRoundNumber
     if not playedCards or #playedCards == 0 then
         return 0, "No cards"
     end
@@ -221,28 +221,33 @@ HandEvaluator.calculateScore = function(playedCards, activeJokers)
         currentScore = 0 -- Default to 0 if hand type has no score defined
     end
 
-    -- Apply Joker effects
+    local scoreDetails = {
+        score = currentScore,
+        handType = handType, 
+        cards = playedCards,
+        roundNumber = currentRoundNumber or 0 -- Store round number
+    }
+
+    -- Apply Joker effects using the new handler system
     if activeJokers and #activeJokers > 0 then
-        for _, joker in ipairs(activeJokers) do
-            if joker.effectType == "score_multiplier" then
-                if joker.value and type(joker.value) == "number" then
-                    currentScore = currentScore * joker.value
-                    print("Applied joker '" .. joker.name .. "': score multiplied by " .. joker.value)
-                else
-                    print("Warning: Joker '" .. joker.name .. "' has invalid value for score_multiplier: " .. tostring(joker.value))
-                end
-            elseif joker.effectType == "flat_score_bonus" then
-                if joker.value and type(joker.value) == "number" then
-                    currentScore = currentScore + joker.value
-                    print("Applied joker '" .. joker.name .. "': flat score bonus of " .. joker.value)
-                else
-                    print("Warning: Joker '" .. joker.name .. "' has invalid value for flat_score_bonus: " .. tostring(joker.value))
-                end
+        -- Ensure Joker module (and its effectHandlers) is accessible.
+        -- It should be, as main.lua requires Joker, then HandEvaluator.
+        -- If Joker was a local in main, we'd need to pass it or make it global.
+        -- Assuming Joker is available globally or as part of a loaded module accessible here.
+        -- For this structure, Joker should be available as it's required before HandEvaluator in main.lua
+        -- and both are assigned to global-like variables in main.lua's scope.
+        
+        for _, jokerInstance in ipairs(activeJokers) do
+            if jokerInstance.effectType and Joker.effectHandlers[jokerInstance.effectType] then
+                local handlerFunc = Joker.effectHandlers[jokerInstance.effectType]
+                scoreDetails = handlerFunc(jokerInstance, scoreDetails)
+            else
+                print("Warning: No handler found for joker effectType: " .. tostring(jokerInstance.effectType) .. " for joker: " .. jokerInstance.name)
             end
         end
     end
 
-    return currentScore, handType
+    return scoreDetails.score, handType
 end
 
 return HandEvaluator

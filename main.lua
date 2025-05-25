@@ -18,8 +18,8 @@ sfxActionConfirm = nil
 sfxActionCancel = nil
 
 function playSound(soundEffect)
-    if soundEffect and love.audio then -- Check if love.audio module is available too
-        love.audio.stop(soundEffect) -- Stop previous instance if any, to prevent overlap/spam
+    if soundEffect and love.audio then 
+        love.audio.stop(soundEffect) 
         love.audio.play(soundEffect)
     end
 end
@@ -46,21 +46,67 @@ shopItems = {}
 availableShopJokers = {} 
 selectedShopItemIndex = 1 
 
+-- Helper function to check if player already owns a specific joker by ID (name)
+function playerOwnsJoker(jokerId)
+    for _, ownedJoker in ipairs(playerJokers) do
+        if ownedJoker.id == jokerId then
+            return true
+        end
+    end
+    return false
+end
+
 function generateShopItems()
     shopItems = {} 
     selectedShopItemIndex = 1
     local numItemsToOffer = math.min(#availableShopJokers, math.random(2, 3))
+    
+    local offeredJokerIds = {} -- To track IDs offered in this specific shop instance
     local tempAvailable = {}
     for _, jokerData in ipairs(availableShopJokers) do
         table.insert(tempAvailable, jokerData)
     end
+
+    local attempts = 0
+    local maxAttemptsPerSlot = #availableShopJokers * 2 -- Heuristic to prevent long loops
+
     for i = 1, numItemsToOffer do
         if #tempAvailable == 0 then break end 
-        local randomIndex = math.random(#tempAvailable)
-        local jokerData = table.remove(tempAvailable, randomIndex)
-        table.insert(shopItems, Joker:new(jokerData.name, jokerData.description, jokerData.effectType, jokerData.value))
+        
+        local chosenJokerData = nil
+        local foundUniqueUnowned = false
+        local currentSlotAttempts = 0
+
+        while not foundUniqueUnowned and #tempAvailable > 0 and currentSlotAttempts < maxAttemptsPerSlot do
+            local randomIndex = math.random(#tempAvailable)
+            local potentialJokerData = tempAvailable[randomIndex] -- Peek, don't remove yet
+
+            if not playerOwnsJoker(potentialJokerData.name) and not offeredJokerIds[potentialJokerData.name] then
+                chosenJokerData = table.remove(tempAvailable, randomIndex) -- Now remove
+                offeredJokerIds[chosenJokerData.name] = true
+                foundUniqueUnowned = true
+            else
+                -- To avoid repeatedly picking the same owned/already-offered joker, remove it from consideration for this shop instance
+                table.remove(tempAvailable, randomIndex) 
+            end
+            currentSlotAttempts = currentSlotAttempts + 1
+            attempts = attempts + 1
+        end
+
+        if chosenJokerData then
+            table.insert(shopItems, Joker:new(chosenJokerData.name, chosenJokerData.description, chosenJokerData.effectType, chosenJokerData.value))
+        end
+        if attempts > maxAttemptsPerSlot * numItemsToOffer then -- Overall safety break
+             print("Warning: Max attempts reached in generateShopItems. Shop might not be full.")
+             break
+        end
     end
-    setUIMessage("Welcome to the Shop! Select (1-" .. #shopItems .. "), Enter to buy. 'C' to continue.", 5)
+
+    if #shopItems > 0 then
+        setUIMessage("Welcome to the Shop! Select (1-" .. #shopItems .. "), Enter to buy. 'C' to continue.", 5)
+    else
+        setUIMessage("Shop is empty (no new Jokers to offer or all owned). Press 'C' to continue.", 5)
+    end
 end
 
 
@@ -73,9 +119,7 @@ function love.load()
     HandEvaluator = require("hand_evaluator")
     Joker = require("joker") 
 
-    -- Load Sound Effects (placeholders - will be nil if files don't exist)
-    -- To use actual sounds, replace nil with: love.audio.newSource("assets/sounds/filename.ogg", "static")
-    -- Example: sfxCardDeal = love.audio.newSource("assets/sounds/card_deal.ogg", "static")
+    -- Load Sound Effects
     if love.filesystem.exists("assets/sounds/card_deal.ogg") then
         sfxCardDeal = love.audio.newSource("assets/sounds/card_deal.ogg", "static")
     end
@@ -97,14 +141,12 @@ function love.load()
     if love.filesystem.exists("assets/sounds/round_clear.ogg") then
         sfxRoundClear = love.audio.newSource("assets/sounds/round_clear.ogg", "static")
     end
-    -- Adding confirm/cancel sounds as they are distinct actions in the new flow
     if love.filesystem.exists("assets/sounds/action_confirm.ogg") then
         sfxActionConfirm = love.audio.newSource("assets/sounds/action_confirm.ogg", "static")
     end
     if love.filesystem.exists("assets/sounds/action_cancel.ogg") then
         sfxActionCancel = love.audio.newSource("assets/sounds/action_cancel.ogg", "static")
     end
-
 
     -- Game loop variables
     playerScore = 0 
@@ -126,6 +168,46 @@ function love.load()
     table.insert(availableShopJokers, {name="Joker of Diamonds", description="Score x1.3", effectType="score_multiplier", value=1.3})
     table.insert(availableShopJokers, {name="Glass Joker", description="Score x2 (Fragile!)", effectType="score_multiplier", value=2.0})
     table.insert(availableShopJokers, {name="Stone Joker", description="+50 flat bonus", effectType="flat_score_bonus", value=50})
+    -- Add a few more to make testing uniqueness easier
+    table.insert(availableShopJokers, {name="Golden Joker", description="Score x1.5", effectType="score_multiplier", value=1.5})
+    table.insert(availableShopJokers, {name="Lucky Joker", description="+7 flat bonus", effectType="flat_score_bonus", value=7})
+
+    -- Set A Jokers
+    table.insert(availableShopJokers, {
+        name = "Straight Shooter",
+        description = "Straights score an additional x2 multiplier.",
+        effectType = "hand_type_score_multiplier",
+        value = { handType = "Straight", multiplier = 2 }
+    })
+
+    table.insert(availableShopJokers, {
+        name = "Flush Fever",
+        description = "Flushes gain a +75 flat score bonus.",
+        effectType = "hand_type_flat_bonus",
+        value = { handType = "Flush", bonus = 75 }
+    })
+
+    table.insert(availableShopJokers, {
+        name = "Ace High Club",
+        description = "+15 score for each Ace in your played hand.",
+        effectType = "rank_specific_flat_bonus_per_card",
+        value = { rank = "A", bonusPerCard = 15 }
+    })
+
+    table.insert(availableShopJokers, {
+        name = "Lucky Number Seven",
+        description = "Any played hand containing at least one '7' gets a +35 flat score bonus.",
+        effectType = "conditional_flat_bonus_on_rank_present",
+        value = { rank = "7", bonus = 35 }
+    })
+
+    table.insert(availableShopJokers, {
+        name = "Red Suit Riches",
+        description = "Played hands containing only Red suit cards (Hearts, Diamonds) get an additional x1.5 multiplier.",
+        effectType = "conditional_score_multiplier_all_suits_are_color",
+        value = { color = "Red", multiplier = 1.5 }
+    })
+
 
     gameDeck = Deck:new()
     gameDeck:shuffle()
@@ -146,7 +228,7 @@ function refillHand()
                 print("Deck empty. Reshuffling.")
                 gameDeck:reshuffle()
                 setUIMessage("Deck reshuffled!", 2)
-                playSound(sfxCardDeal) -- Sound for reshuffle might be same as deal
+                playSound(sfxCardDeal) 
             end
             local newCard = gameDeck:deal()
             if newCard then
@@ -159,7 +241,7 @@ function refillHand()
                 break 
             end
         end
-        if dealtCardThisRefill then playSound(sfxCardDeal) end -- Play deal sound once if any cards were dealt
+        if dealtCardThisRefill then playSound(sfxCardDeal) end 
     end
 end
 
@@ -298,12 +380,16 @@ function drawShopUI()
     else
         for i, item in ipairs(shopItems) do
             local itemText = i .. ". " .. item.name .. " - " .. item.description
-            if i == selectedShopItemIndex then
+            if playerOwnsJoker(item.id) then -- Display if owned
+                 itemText = itemText .. " (Owned)"
+                 love.graphics.setColor(0.6, 0.6, 0.6) -- Grey out if owned
+            elseif i == selectedShopItemIndex then
                 love.graphics.setColor(1,1,0) 
             else
                 love.graphics.setColor(1,1,1)
             end
             love.graphics.printf(itemText, 50, 120 + (i * 40), currentScreenWidth - 100, "left")
+            love.graphics.setColor(1,1,1) -- Reset color for next item
         end
     end
     love.graphics.setColor(1,1,1)
@@ -381,7 +467,7 @@ function love.keypressed(key)
                 stagedCards = cardsToMove
                 handSelectedCardIndices = {}
                 setUIMessage("Staging for PLAY. [Enter] to confirm, [Esc] to cancel.", 5)
-                playSound(sfxCardSelect) -- Sound for staging action
+                playSound(sfxCardSelect) 
             else
                 setUIMessage("Select cards from hand first to stage for play!")
                 playSound(sfxError)
@@ -400,7 +486,7 @@ function love.keypressed(key)
                 stagedCards = cardsToMove
                 handSelectedCardIndices = {}
                 setUIMessage("Staging for DISCARD. [Enter] to confirm, [Esc] to cancel.", 5)
-                playSound(sfxCardSelect) -- Sound for staging action
+                playSound(sfxCardSelect) 
             else
                 setUIMessage("Select cards from hand first to stage for discard!")
                 playSound(sfxError)
@@ -425,7 +511,7 @@ function love.keypressed(key)
                         elseif playerPlaysRemaining == 0 then
                             setUIMessage("Game Over - Target: " .. targetScore .. ", Final Score: " .. playerScore, 5)
                             gameState = "gameover"
-                            playSound(sfxError) -- Or a specific game over sound
+                            playSound(sfxError) 
                         else
                             setUIMessage("Played: " .. handType .. " (" .. scoreForThisHand .. "). Plays left: " .. playerPlaysRemaining, 3)
                         end
@@ -461,7 +547,7 @@ function love.keypressed(key)
             playSound(sfxActionCancel)
             if #stagedCards > 0 then
                 for _, card in ipairs(stagedCards) do playerHand:addCard(card) end
-                 playSound(sfxCardDeal) -- Sound for cards returning to hand
+                 playSound(sfxCardDeal) 
             end
             stagedCards = {}
             currentActionType = nil
@@ -474,18 +560,24 @@ function love.keypressed(key)
         if numKey and numKey >= 1 and numKey <= #shopItems then
             selectedShopItemIndex = numKey
             setUIMessage("Selected: " .. shopItems[selectedShopItemIndex].name)
-            playSound(sfxCardSelect) -- Sound for selecting shop item
+            playSound(sfxCardSelect) 
         end
 
         if (key == "return" or key == "kpenter") and #shopItems > 0 and selectedShopItemIndex then
-            if shopItems[selectedShopItemIndex] then
-                local purchasedJoker = table.remove(shopItems, selectedShopItemIndex)
-                table.insert(playerJokers, purchasedJoker)
-                setUIMessage("Purchased: " .. purchasedJoker.name .. "!", 2)
-                print("Purchased Joker: " .. purchasedJoker.name)
-                playSound(sfxShopPurchase)
-                selectedShopItemIndex = math.max(1, selectedShopItemIndex -1) 
-                if #shopItems == 0 then selectedShopItemIndex = nil end
+            local itemToBuy = shopItems[selectedShopItemIndex]
+            if itemToBuy then
+                if playerOwnsJoker(itemToBuy.id) then
+                    setUIMessage("You already have this Joker: " .. itemToBuy.name, 2)
+                    playSound(sfxError)
+                else
+                    local purchasedJoker = table.remove(shopItems, selectedShopItemIndex)
+                    table.insert(playerJokers, purchasedJoker)
+                    setUIMessage("Purchased: " .. purchasedJoker.name .. "!", 2)
+                    print("Purchased Joker: " .. purchasedJoker.name)
+                    playSound(sfxShopPurchase)
+                    selectedShopItemIndex = math.max(1, selectedShopItemIndex -1) 
+                    if #shopItems == 0 then selectedShopItemIndex = nil end
+                end
             else
                  setUIMessage("Item not available.", 2)
                  playSound(sfxError)
@@ -493,7 +585,7 @@ function love.keypressed(key)
         end
 
         if key == "c" then
-            playSound(sfxActionConfirm) -- Generic confirm for leaving shop
+            playSound(sfxActionConfirm) 
             currentRound = currentRound + 1
             targetScore = targetScore + 50 * currentRound 
             playerScore = 0 
@@ -546,10 +638,10 @@ function love.keypressed(key)
         gameDeck = Deck:new(); gameDeck:shuffle()
         playerHand = Hand:new()
         stagedCards = {}; currentActionType = nil; handSelectedCardIndices = {}
+        playerJokers = {} -- Reset player jokers on new game
         refillHand()
         setUIMessage("New game started! Select cards, then P or D.")
         gameState = "gameplay" 
-        playSound(sfxRoundClear) -- Or a specific game start sound
+        playSound(sfxRoundClear) 
     end
 end
-
