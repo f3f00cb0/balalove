@@ -221,6 +221,8 @@ HandEvaluator.calculateScore = function(playedCards, activeJokers)
         currentScore = 0 -- Default to 0 if hand type has no score defined
     end
 
+    local activatedJokerNames = {} -- Collect names of activated jokers
+
     -- Apply Joker effects
     if activeJokers and #activeJokers > 0 then
         for _, joker in ipairs(activeJokers) do
@@ -228,19 +230,71 @@ HandEvaluator.calculateScore = function(playedCards, activeJokers)
                 if joker.value and type(joker.value) == "number" then
                     currentScore = currentScore * joker.value
                     print("Applied joker '" .. joker.name .. "': score multiplied by " .. joker.value)
+                    table.insert(activatedJokerNames, joker.name .. " (x" .. joker.value .. ")")
                 else
                     print("Warning: Joker '" .. joker.name .. "' has invalid value for score_multiplier: " .. tostring(joker.value))
                 end
-            end
-            -- Other effect types like 'flat_bonus' could be handled here with 'elseif'
+            -- Example for flat_bonus, if it were implemented and should show feedback
             -- elseif joker.effectType == "flat_bonus" then
-            --     currentScore = currentScore + joker.value
-            --     print("Applied joker '" .. joker.name .. "': flat bonus of " .. joker.value)
-            -- end
+            --     if joker.value and type(joker.value) == "number" then
+            --         currentScore = currentScore + joker.value
+            --         print("Applied joker '" .. joker.name .. "': flat bonus of " .. joker.value)
+            --         table.insert(activatedJokerNames, joker.name .. " (+" .. joker.value .. ")")
+            --     else
+            --         print("Warning: Joker '" .. joker.name .. "' has invalid value for flat_bonus: " .. tostring(joker.value))
+            --     end
+            elseif joker.effectType == "conditional_bonus_suit" then
+                if joker.value and type(joker.value) == "table" and
+                   joker.value.suit and joker.value.count and joker.value.bonus then
+                    local suitCounts = HandEvaluator.getSuitCounts(playedCards)
+                    if (suitCounts[joker.value.suit] or 0) >= joker.value.count then
+                        currentScore = currentScore + joker.value.bonus
+                        print("Applied joker '" .. joker.name .. "': +" .. joker.value.bonus .. " for " .. joker.value.count .. " " .. joker.value.suit)
+                        table.insert(activatedJokerNames, joker.name .. " (+" .. joker.value.bonus .. ")")
+                    end
+                else
+                    print("Warning: Joker '" .. joker.name .. "' has invalid value for conditional_bonus_suit: " .. tostring(joker.value))
+                end
+            elseif joker.effectType == "conditional_mult_highcard_ace" then
+                if handType == "HighCard" then
+                    local hasAce = false
+                    for _, card in ipairs(playedCards) do
+                        if card.rank == "A" then
+                            hasAce = true
+                            break
+                        end
+                    end
+                    if hasAce then
+                        if joker.value and type(joker.value) == "number" then
+                            currentScore = currentScore * joker.value
+                            print("Applied joker '" .. joker.name .. "': score multiplied by " .. joker.value .. " for Ace HighCard")
+                            table.insert(activatedJokerNames, joker.name .. " (x" .. joker.value .. ")")
+                        else
+                             print("Warning: Joker '" .. joker.name .. "' has invalid value for conditional_mult_highcard_ace: " .. tostring(joker.value))
+                        end
+                    end
+                end
+            elseif joker.effectType == "bonus_per_card" then
+                if joker.value and type(joker.value) == "number" then
+                    local bonus = joker.value * #playedCards
+                    currentScore = currentScore + bonus
+                    print("Applied joker '" .. joker.name .. "': +" .. bonus .. " for " .. #playedCards .. " cards")
+                    table.insert(activatedJokerNames, joker.name .. " (+" .. bonus .. ")")
+                else
+                    print("Warning: Joker '" .. joker.name .. "' has invalid value for bonus_per_card: " .. tostring(joker.value))
+                end
+            end
+            -- Other effect types like 'conditional_multiplier' could be handled here (e.g. Card Sharp Joker, not part of this subtask's new additions)
+            -- For example, Card Sharp Joker:
+            -- elseif joker.effectType == "conditional_multiplier" then
+            --    if #playedCards <= 3 then -- Example condition
+            --        currentScore = currentScore * joker.value
+            --        table.insert(activatedJokerNames, joker.name .. " (x" .. joker.value .. " for small hand)")
+            --    end
         end
     end
 
-    return currentScore, handType
+    return currentScore, handType, activatedJokerNames
 end
 
 return HandEvaluator

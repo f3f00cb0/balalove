@@ -12,21 +12,21 @@ suitColors = {
 
 -- Suit symbols for drawing
 suitSymbols = {
-    Hearts = "H",
-    Diamonds = "D",
-    Clubs = "C",
-    Spades = "S"
+    Hearts = "♥", -- U+2665
+    Diamonds = "♦", -- U+2666
+    Clubs = "♣", -- U+2663
+    Spades = "♠"  -- U+2660
 }
 
 -- Function to draw a card placeholder
 function drawCardPlaceholder(x, y, suit, rank)
     -- Draw card background (white)
     love.graphics.setColor(1, 1, 1)
-    love.graphics.rectangle("fill", x, y, cardWidth, cardHeight)
+    love.graphics.rectangle("fill", x, y, cardWidth, cardHeight, 5, 5) -- Added rounding
 
     -- Draw card border (black)
     love.graphics.setColor(0, 0, 0)
-    love.graphics.rectangle("line", x, y, cardWidth, cardHeight)
+    love.graphics.rectangle("line", x, y, cardWidth, cardHeight, 5, 5) -- Added rounding
 
     -- Set text color based on suit
     local color = suitColors[suit]
