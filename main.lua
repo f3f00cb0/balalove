@@ -835,19 +835,3 @@ function love.keypressed(key)
         playSound(sfxRoundClear) 
     end
 end
-
-[end of main.lua]
-
-[end of main.lua]
-
-[end of main.lua]
-
-[end of main.lua]
-
-[end of main.lua]
-
-[end of main.lua]
-
-[end of main.lua]
-
-[end of main.lua]
