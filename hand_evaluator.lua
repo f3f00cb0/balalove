@@ -232,7 +232,9 @@ HandEvaluator.calculateScore = function(playedCards, activeJokers, context) -- C
         playerHandActualSize = currentContext.playerHandActualSize or 0,
         playerJokerCount = currentContext.playerJokerCount or 0,
         isFirstPlay = currentContext.isFirstPlay or false,
-        isLastPlay = currentContext.isLastPlay or false
+        isLastPlay = currentContext.isLastPlay or false,
+        maxHandSize = currentContext.maxHandSize or 8, -- Default to 8 if not provided
+        boughtInShopLastRound = currentContext.boughtInShopLastRound or false
     }
 
     -- Apply Joker effects using the new handler system

@@ -1,29 +1,88 @@
 -- Joker class
+-- Represents a Joker card with a name, description, effect, and potentially limited uses.
 Joker = {}
 Joker.__index = Joker
 
-function Joker:new(name, description, effectType, value)
+-- Helper function for deep copying a table (simple version, handles nested tables, not functions or userdata)
+local function deepcopy(orig)
+    local orig_type = type(orig)
+    local copy
+    if orig_type == 'table' then
+        copy = {}
+        for orig_key, orig_value in next, orig, nil do
+            copy[deepcopy(orig_key)] = deepcopy(orig_value)
+        end
+        setmetatable(copy, deepcopy(getmetatable(orig)))
+    else -- number, string, boolean, etc
+        copy = orig
+    end
+    return copy
+end
+
+--- Constructor for a new Joker instance.
+-- @param data (table) A table containing all necessary fields for the Joker.
+-- Fields expected in data:
+--   name (string)
+--   description (string)
+--   effectType (string)
+--   value (any) - Can be a simple type or a table. If a table, it's deep-copied.
+--   rarity (string, optional) - Defaults to "Common".
+--   conceptualCost (number, optional) - Defaults to 0.
+--   uses_total (number, optional) - Total uses. Defaults to -1 (infinite).
+function Joker:new(data)
     local instance = setmetatable({}, Joker)
-    instance.name = name or "Unnamed Joker"
-    instance.id = name or "Unnamed Joker" -- Use name as the unique ID
-    instance.description = description or "No description."
-    instance.effectType = effectType or "none"
-    instance.value = value or 0
+    
+    instance.name = data.name or "Unnamed Joker"
+    instance.id = data.name or "Unnamed Joker" -- Use name as the unique ID for ownership checks.
+    instance.description = data.description or "No description."
+    instance.effectType = data.effectType or "none" -- The type of effect this Joker has.
+    
+    -- Deep copy 'value' if it's a table to prevent shared state issues if effects modify it.
+    if type(data.value) == "table" then
+        instance.value = deepcopy(data.value)
+    else
+        instance.value = data.value -- Handles simple types (number, string, boolean) or nil.
+    end
+    
+    instance.rarity = data.rarity or "Common" 
+    instance.conceptualCost = data.conceptualCost or 0 
+
+    instance.uses_total = data.uses_total or -1 
+    instance.uses_remaining = instance.uses_total 
+    
+    instance.active = true 
+    instance.marked_for_destruction = false 
+    instance.apply_ante_reduction_now = false 
+
     return instance
 end
 
+--- Returns a string representation of the Joker, including its state.
 function Joker:__tostring()
-    return self.name .. " (" .. self.effectType .. ": " .. tostring(self.value) .. ")"
+    local str = self.name
+    if self.uses_total ~= -1 then
+        str = str .. " (" .. self.uses_remaining .. "/" .. self.uses_total .. " uses)"
+    end
+    str = str .. " [" .. self.effectType .. ": " 
+    if type(self.value) == "table" then
+        str = str .. "{...}" -- Keep it concise for tables
+    else
+        str = str .. tostring(self.value)
+    end
+    str = str .. "]"
+    if not self.active then str = str .. " (Inactive)" end
+    if self.marked_for_destruction then str = str .. " (To Be Destroyed)" end
+    return str
 end
 
--- Table to store joker effect handler functions
+-- Table to store all Joker effect handler functions.
 Joker.effectHandlers = {}
 
--- Helper for suit colors (can be defined globally in this module or locally within the handler)
+-- Helper table mapping card suits to their colors (Red/Black).
 local internalSuitColors = { Hearts = "Red", Diamonds = "Red", Clubs = "Black", Spades = "Black" }
 
-
--- score_multiplier effect handler
+--- Simple score multiplier.
+-- Value: (number) The multiplier value.
 function Joker.effectHandlers.score_multiplier(jokerInstance, scoreDetails)
     if jokerInstance.value and type(jokerInstance.value) == "number" then
         scoreDetails.score = scoreDetails.score * jokerInstance.value
@@ -34,7 +93,8 @@ function Joker.effectHandlers.score_multiplier(jokerInstance, scoreDetails)
     return scoreDetails
 end
 
--- flat_score_bonus effect handler
+--- Simple flat score bonus.
+-- Value: (number) The bonus amount.
 function Joker.effectHandlers.flat_score_bonus(jokerInstance, scoreDetails)
     if jokerInstance.value and type(jokerInstance.value) == "number" then
         scoreDetails.score = scoreDetails.score + jokerInstance.value
@@ -45,7 +105,8 @@ function Joker.effectHandlers.flat_score_bonus(jokerInstance, scoreDetails)
     return scoreDetails
 end
 
--- hand_type_score_multiplier effect handler
+--- Hand Type Score Multiplier.
+-- Value: (table) { handType = "HandTypeNameString", multiplier = number }
 function Joker.effectHandlers.hand_type_score_multiplier(jokerInstance, scoreDetails)
     if jokerInstance.value and type(jokerInstance.value) == "table" and
        jokerInstance.value.handType and type(jokerInstance.value.handType) == "string" and
@@ -61,7 +122,8 @@ function Joker.effectHandlers.hand_type_score_multiplier(jokerInstance, scoreDet
     return scoreDetails
 end
 
--- hand_type_flat_bonus effect handler
+--- Hand Type Flat Bonus.
+-- Value: (table) { handType = "HandTypeNameString", bonus = number }
 function Joker.effectHandlers.hand_type_flat_bonus(jokerInstance, scoreDetails)
     if jokerInstance.value and type(jokerInstance.value) == "table" and
        jokerInstance.value.handType and type(jokerInstance.value.handType) == "string" and
@@ -77,7 +139,8 @@ function Joker.effectHandlers.hand_type_flat_bonus(jokerInstance, scoreDetails)
     return scoreDetails
 end
 
--- rank_specific_flat_bonus_per_card effect handler
+--- Rank-Specific Flat Bonus Per Card.
+-- Value: (table) { rank = "RankString", bonusPerCard = number }
 function Joker.effectHandlers.rank_specific_flat_bonus_per_card(jokerInstance, scoreDetails)
     if jokerInstance.value and type(jokerInstance.value) == "table" and
        jokerInstance.value.rank and type(jokerInstance.value.rank) == "string" and
@@ -99,7 +162,8 @@ function Joker.effectHandlers.rank_specific_flat_bonus_per_card(jokerInstance, s
     return scoreDetails
 end
 
--- conditional_flat_bonus_on_rank_present effect handler
+--- Conditional Flat Bonus if a Specific Rank is Present.
+-- Value: (table) { rank = "RankString", bonus = number }
 function Joker.effectHandlers.conditional_flat_bonus_on_rank_present(jokerInstance, scoreDetails)
     if jokerInstance.value and type(jokerInstance.value) == "table" and
        jokerInstance.value.rank and type(jokerInstance.value.rank) == "string" and
@@ -122,14 +186,15 @@ function Joker.effectHandlers.conditional_flat_bonus_on_rank_present(jokerInstan
     return scoreDetails
 end
 
--- conditional_score_multiplier_all_suits_are_color effect handler
+--- Conditional Score Multiplier if All Cards are of a Specific Color.
+-- Value: (table) { color = "Red" or "Black", multiplier = number }
 function Joker.effectHandlers.conditional_score_multiplier_all_suits_are_color(jokerInstance, scoreDetails)
     if jokerInstance.value and type(jokerInstance.value) == "table" and
        jokerInstance.value.color and (jokerInstance.value.color == "Red" or jokerInstance.value.color == "Black") and
        jokerInstance.value.multiplier and type(jokerInstance.value.multiplier) == "number" then
 
         local allMatchColor = true
-        if #scoreDetails.cards == 0 then -- No cards, condition arguably not met, or met vacuously. Let's say not met.
+        if #scoreDetails.cards == 0 then 
             allMatchColor = false
         end
 
@@ -151,7 +216,6 @@ function Joker.effectHandlers.conditional_score_multiplier_all_suits_are_color(j
     return scoreDetails
 end
 
--- Helper function to get rank counts, similar to HandEvaluator's, but local if needed
 local function getRankCountsForJoker(cards)
     local counts = {}
     for _, card in ipairs(cards) do
@@ -160,20 +224,15 @@ local function getRankCountsForJoker(cards)
     return counts
 end
 
--- Helper function to get numerical rank, specific for Blackjack (Ace as 1 or 11)
-local function getBlackjackRankValue(rankString, currentSum)
-    if rankString == "A" then
-        return (currentSum + 11 <= 21) and 11 or 1
-    elseif rankString == "K" or rankString == "Q" or rankString == "J" then
-        return 10
-    else
-        return tonumber(rankString) or 0 -- tonumber will handle "2" through "10"
+local function isRankEven(rank)
+    if HandEvaluator and HandEvaluator.rankValues and HandEvaluator.rankValues[rank] then
+        return HandEvaluator.rankValues[rank] % 2 == 0
     end
+    print("Warning: HandEvaluator.rankValues not accessible for rank parity check on rank: " .. tostring(rank))
+    return false 
 end
 
-
 -- Set B Joker Effect Handlers
-
 function Joker.effectHandlers.conditional_hand_type_bonus_rank_math(jokerInstance, scoreDetails)
     if not (jokerInstance.value and type(jokerInstance.value) == "table" and
             jokerInstance.value.handType and type(jokerInstance.value.handType) == "string" and
@@ -185,33 +244,28 @@ function Joker.effectHandlers.conditional_hand_type_bonus_rank_math(jokerInstanc
 
     if scoreDetails.handType == jokerInstance.value.handType then
         local rankCounts = getRankCountsForJoker(scoreDetails.cards)
-        local pairedRankValue = 0
+        local criticalRankValue = 0
         
-        if jokerInstance.value.handType == "Pair" then
+        if jokerInstance.value.handType == "Pair" then 
             for rank, count in pairs(rankCounts) do
                 if count == 2 then
-                    -- Use HandEvaluator.rankValues if available, otherwise define a local map.
-                    -- Assuming HandEvaluator is loaded and globally accessible as 'HandEvaluator'
                     if HandEvaluator and HandEvaluator.rankValues and HandEvaluator.rankValues[rank] then
-                        pairedRankValue = HandEvaluator.rankValues[rank]
+                        criticalRankValue = HandEvaluator.rankValues[rank]
                     else 
-                        -- Fallback or error if HandEvaluator.rankValues isn't accessible
                         print("Warning: HandEvaluator.rankValues not accessible for Pair Parity joker.")
                         return scoreDetails 
                     end
-                    break -- Found the pair
+                    break 
                 end
             end
             
-            if pairedRankValue > 0 then
-                -- For a single pair, its value * 2 is the sum of ranks.
-                -- Or, if it's just the rank value itself:
-                if pairedRankValue % 2 == 0 then
+            if criticalRankValue > 0 then
+                if criticalRankValue % 2 == 0 then
                     scoreDetails.score = scoreDetails.score + jokerInstance.value.evenBonus
-                    print("Applied joker '" .. jokerInstance.name .. "': +" .. jokerInstance.value.evenBonus .. " (rank " .. pairedRankValue .. " is even).")
+                    print("Applied joker '" .. jokerInstance.name .. "': +" .. jokerInstance.value.evenBonus .. " (rank " .. criticalRankValue .. " is even).")
                 else
                     scoreDetails.score = scoreDetails.score + jokerInstance.value.oddBonus
-                    print("Applied joker '" .. jokerInstance.name .. "': +" .. jokerInstance.value.oddBonus .. " (rank " .. pairedRankValue .. " is odd).")
+                    print("Applied joker '" .. jokerInstance.name .. "': +" .. jokerInstance.value.oddBonus .. " (rank " .. criticalRankValue .. " is odd).")
                 end
             end
         else
@@ -223,25 +277,26 @@ end
 
 function Joker.effectHandlers.conditional_flat_bonus_card_property_count(jokerInstance, scoreDetails)
     if not (jokerInstance.value and type(jokerInstance.value) == "table" and
-            jokerInstance.value.property and jokerInstance.value.property == "isFaceCard" and -- Currently only supports "isFaceCard"
+            jokerInstance.value.property and jokerInstance.value.property == "isFaceCard" and 
             jokerInstance.value.threshold and type(jokerInstance.value.threshold) == "number" and
             jokerInstance.value.bonus and type(jokerInstance.value.bonus) == "number") then
         print("Warning: Joker '" .. jokerInstance.name .. "' has invalid or incomplete 'value' table. Expected {property='isFaceCard', threshold=T, bonus=B}.")
         return scoreDetails
     end
 
-    local faceCardCount = 0
-    local faceRanks = { ["J"] = true, ["Q"] = true, ["K"] = true }
-
-    for _, card in ipairs(scoreDetails.cards) do
-        if faceRanks[card.rank] then
-            faceCardCount = faceCardCount + 1
+    local propertyCount = 0
+    if jokerInstance.value.property == "isFaceCard" then
+        local faceRanks = { ["J"] = true, ["Q"] = true, ["K"] = true }
+        for _, card in ipairs(scoreDetails.cards) do
+            if faceRanks[card.rank] then
+                propertyCount = propertyCount + 1
+            end
         end
     end
 
-    if faceCardCount >= jokerInstance.value.threshold then
+    if propertyCount >= jokerInstance.value.threshold then
         scoreDetails.score = scoreDetails.score + jokerInstance.value.bonus
-        print("Applied joker '" .. jokerInstance.name .. "': +" .. jokerInstance.value.bonus .. " (" .. faceCardCount .. " face cards >= threshold " .. jokerInstance.value.threshold .. ").")
+        print("Applied joker '" .. jokerInstance.name .. "': +" .. jokerInstance.value.bonus .. " (" .. propertyCount .. " " .. jokerInstance.value.property .. "s >= threshold " .. jokerInstance.value.threshold .. ").")
     end
     return scoreDetails
 end
@@ -277,12 +332,11 @@ function Joker.effectHandlers.conditional_flat_bonus_consecutive_ranks(jokerInst
         return scoreDetails
     end
 
-    if #scoreDetails.cards < 2 then return scoreDetails end -- Need at least 2 cards for consecutive check
+    if #scoreDetails.cards < 2 then return scoreDetails end 
 
     local tempCards = {}
-    for _, c in ipairs(scoreDetails.cards) do table.insert(tempCards, {rank = c.rank, suit = c.suit}) end -- Shallow copy
+    for _, c in ipairs(scoreDetails.cards) do table.insert(tempCards, {rank = c.rank, suit = c.suit}) end 
 
-    -- Sort by rank (Ace high for general case, Ace low handled specifically if needed)
     table.sort(tempCards, function(a,b)
         local valA = (HandEvaluator and HandEvaluator.rankValues and HandEvaluator.rankValues[a.rank]) or tonumber(a.rank) or 0
         local valB = (HandEvaluator and HandEvaluator.rankValues and HandEvaluator.rankValues[b.rank]) or tonumber(b.rank) or 0
@@ -290,7 +344,6 @@ function Joker.effectHandlers.conditional_flat_bonus_consecutive_ranks(jokerInst
     end)
     
     local isConsecutive = true
-    -- Check standard consecutive
     for i = 1, #tempCards - 1 do
         local valCurrent = (HandEvaluator and HandEvaluator.rankValues and HandEvaluator.rankValues[tempCards[i].rank])
         local valNext = (HandEvaluator and HandEvaluator.rankValues and HandEvaluator.rankValues[tempCards[i+1].rank])
@@ -300,11 +353,6 @@ function Joker.effectHandlers.conditional_flat_bonus_consecutive_ranks(jokerInst
         end
     end
     
-    -- Special check for A-2-3-4-5 (if HandEvaluator.rankValues makes Ace 14)
-    -- This specific check is for 5 cards, if the joker should apply to any number of consecutive cards, this needs generalization.
-    -- For simplicity, this joker will trigger for any sequence of N consecutive cards, not just 5-card straights.
-    -- The current `isConsecutive` check above handles general consecutiveness.
-
     if isConsecutive then
         scoreDetails.score = scoreDetails.score + jokerInstance.value.bonus
         print("Applied joker '" .. jokerInstance.name .. "': +" .. jokerInstance.value.bonus .. " (ranks are consecutive).")
@@ -325,7 +373,7 @@ function Joker.effectHandlers.conditional_score_multiplier_blackjack_sum(jokerIn
     for _, card in ipairs(scoreDetails.cards) do
         if card.rank == "A" then
             aceCount = aceCount + 1
-            sum = sum + 11 -- Add Ace as 11 initially
+            sum = sum + 11 
         elseif card.rank == "K" or card.rank == "Q" or card.rank == "J" then
             sum = sum + 10
         else
@@ -333,9 +381,8 @@ function Joker.effectHandlers.conditional_score_multiplier_blackjack_sum(jokerIn
         end
     end
 
-    -- Adjust for Aces if sum > targetSum
     while sum > jokerInstance.value.targetSum and aceCount > 0 do
-        sum = sum - 10 -- Change one Ace from 11 to 1
+        sum = sum - 10 
         aceCount = aceCount - 1
     end
 
@@ -355,24 +402,14 @@ function Joker.effectHandlers.flat_bonus_based_on_round_number(jokerInstance, sc
 
     local bonus = (scoreDetails.roundNumber or 0) * jokerInstance.value.multiplier
     scoreDetails.score = scoreDetails.score + bonus
-    if bonus ~= 0 then -- Print only if bonus is applied (roundNumber > 0 or multiplier not 0)
+    if bonus ~= 0 then 
         print("Applied joker '" .. jokerInstance.name .. "': +" .. bonus .. " (Round " .. (scoreDetails.roundNumber or 0) .. " * " .. jokerInstance.value.multiplier .. ").")
     end
     return scoreDetails
 end
 
--- Helper function for rank parity checks
-local function isRankEven(rank)
-    if HandEvaluator and HandEvaluator.rankValues and HandEvaluator.rankValues[rank] then
-        return HandEvaluator.rankValues[rank] % 2 == 0
-    end
-    print("Warning: HandEvaluator.rankValues not accessible for rank parity check on rank: " .. tostring(rank))
-    return false -- Default or error
-end
-
 
 -- Set C Joker Effect Handlers
-
 function Joker.effectHandlers.multi_rank_specific_flat_bonus_per_card(jokerInstance, scoreDetails)
     if not (jokerInstance.value and type(jokerInstance.value) == "table" and
             jokerInstance.value.ranks and type(jokerInstance.value.ranks) == "table" and
@@ -414,7 +451,7 @@ function Joker.effectHandlers.conditional_score_multiplier_all_cards_property(jo
         if jokerInstance.value.property == "isEvenRank" then
             matches = isRankEven(card.rank)
         elseif jokerInstance.value.property == "isOddRank" then
-            matches = not isRankEven(card.rank) -- Assumes non-even is odd for numerical ranks
+            matches = not isRankEven(card.rank) 
         end
         if not matches then
             allMatchProperty = false
@@ -430,7 +467,6 @@ function Joker.effectHandlers.conditional_score_multiplier_all_cards_property(jo
 end
 
 function Joker.effectHandlers.conditional_flat_bonus_all_suits_are_color(jokerInstance, scoreDetails)
-    -- This is similar to conditional_score_multiplier_all_suits_are_color, but applies a flat bonus.
     if not (jokerInstance.value and type(jokerInstance.value) == "table" and
        jokerInstance.value.color and (jokerInstance.value.color == "Red" or jokerInstance.value.color == "Black") and
        jokerInstance.value.bonus and type(jokerInstance.value.bonus) == "number") then
@@ -495,7 +531,7 @@ function Joker.effectHandlers.flat_bonus_per_other_joker_owned(jokerInstance, sc
         return scoreDetails
     end
 
-    local otherJokerCount = math.max(0, scoreDetails.playerJokerCount - 1) -- Subtract self
+    local otherJokerCount = math.max(0, scoreDetails.playerJokerCount - 1) 
     local bonus = otherJokerCount * jokerInstance.value.bonusPerJoker
     scoreDetails.score = scoreDetails.score + bonus
     if bonus ~= 0 then
@@ -533,7 +569,6 @@ function Joker.effectHandlers.conditional_flat_bonus_last_play_of_round(jokerIns
 end
 
 -- Set D Joker Effect Handlers
-
 function Joker.effectHandlers.multi_rank_range_flat_bonus_per_card(jokerInstance, scoreDetails)
     if not (jokerInstance.value and type(jokerInstance.value) == "table" and
             jokerInstance.value.ranks_low and type(jokerInstance.value.ranks_low) == "number" and
@@ -613,8 +648,6 @@ function Joker.effectHandlers.conditional_flat_bonus_if_hand_emptied(jokerInstan
         return scoreDetails
     end
     
-    -- playerHandActualSize is the size *before* the played cards were removed.
-    -- So, if playerHandActualSize == #scoreDetails.cards, it means all cards from hand were played.
     if scoreDetails.playerHandActualSize == #scoreDetails.cards then
         scoreDetails.score = scoreDetails.score + jokerInstance.value.bonus
         print("Applied joker '" .. jokerInstance.name .. "': +" .. jokerInstance.value.bonus .. " (hand emptied).")
@@ -696,5 +729,13439 @@ function Joker.effectHandlers.conditional_flat_bonus_joker_count_threshold(joker
     return scoreDetails
 end
 
+-- Set E Joker Effect Handlers
+
+--- 50/50 Chance Score Multiplier or Score Set to Low Value (Limited Uses).
+-- Effect: 50% chance to multiply score, 50% chance score becomes `failScore`. Decrements uses.
+-- Value: (table) { multiplier = number, failScore = number }
+-- Instance Fields: `uses_remaining`, `uses_total`, `marked_for_destruction`.
+function Joker.effectHandlers.final_score_gambler(jokerInstance, scoreDetails)
+    if not (jokerInstance.value and type(jokerInstance.value) == "table" and
+            jokerInstance.value.multiplier and type(jokerInstance.value.multiplier) == "number" and
+            jokerInstance.value.failScore and type(jokerInstance.value.failScore) == "number") then
+        print("Warning: Joker '" .. jokerInstance.name .. "' has invalid 'value' table. Expected {multiplier=M, failScore=FS}.")
+        return scoreDetails
+    end
+
+    if math.random() < 0.5 then
+        scoreDetails.score = scoreDetails.score * jokerInstance.value.multiplier
+        print("Applied joker '" .. jokerInstance.name .. "': Lucky! Score multiplied by " .. jokerInstance.value.multiplier)
+    else
+        scoreDetails.score = jokerInstance.value.failScore
+        print("Applied joker '" .. jokerInstance.name .. "': Unlucky! Score set to " .. jokerInstance.value.failScore)
+    end
+    
+    if jokerInstance.uses_total ~= -1 then
+        jokerInstance.uses_remaining = jokerInstance.uses_remaining - 1
+        if jokerInstance.uses_remaining <= 0 then
+            jokerInstance.marked_for_destruction = true
+            print("Joker '" .. jokerInstance.name .. "' used up and marked for destruction.")
+        end
+    end
+    return scoreDetails
+end
+
+--- Conditional Score Minimum and Self-Destruct.
+-- Effect: If current score is <= 0, sets score to a minimum value. Joker is then destroyed.
+-- Value: (table) { minimumScore = number }
+-- Instance Fields: `marked_for_destruction`.
+function Joker.effectHandlers.conditional_score_minimum_and_destroy(jokerInstance, scoreDetails)
+    if not (jokerInstance.value and type(jokerInstance.value) == "table" and
+            jokerInstance.value.minimumScore and type(jokerInstance.value.minimumScore) == "number") then
+        print("Warning: Joker '" .. jokerInstance.name .. "' has invalid 'value' table. Expected {minimumScore=MS}.")
+        return scoreDetails
+    end
+
+    if scoreDetails.score <= 0 then
+        scoreDetails.score = jokerInstance.value.minimumScore
+        print("Applied joker '" .. jokerInstance.name .. "': Score was <= 0, set to minimum " .. jokerInstance.value.minimumScore)
+    end
+    jokerInstance.marked_for_destruction = true 
+    print("Joker '" .. jokerInstance.name .. "' used and marked for destruction.")
+    return scoreDetails
+end
+
+--- Specific Suit Flush Multiplier.
+-- Effect: Multiplies score if the hand is a Flush and all cards are of a specific suit.
+-- Value: (table) { suit = "TargetSuitString", multiplier = number }
+function Joker.effectHandlers.specific_suit_flush_multiplier(jokerInstance, scoreDetails)
+    if not (jokerInstance.value and type(jokerInstance.value) == "table" and
+            jokerInstance.value.suit and type(jokerInstance.value.suit) == "string" and
+            jokerInstance.value.multiplier and type(jokerInstance.value.multiplier) == "number") then
+        print("Warning: Joker '" .. jokerInstance.name .. "' has invalid 'value' table. Expected {suit='TargetSuit', multiplier=M}.")
+        return scoreDetails
+    end
+
+    if scoreDetails.handType == "Flush" then
+        local allMatchSuit = true
+        if #scoreDetails.cards == 0 then allMatchSuit = false end
+
+        for _, card in ipairs(scoreDetails.cards) do
+            if card.suit ~= jokerInstance.value.suit then
+                allMatchSuit = false
+                break
+            end
+        end
+        if allMatchSuit then
+            scoreDetails.score = scoreDetails.score * jokerInstance.value.multiplier
+            print("Applied joker '" .. jokerInstance.name .. "': score multiplied by " .. jokerInstance.value.multiplier .. " for " .. jokerInstance.value.suit .. " Flush.")
+        end
+    end
+    return scoreDetails
+end
+
+--- Conditional Multiplier if Joker Count is Exactly a Specific Number.
+-- Effect: Multiplies score if the player's total number of Jokers is exactly a specific count.
+-- Value: (table) { count = number, multiplier = number }
+-- Dependencies: `scoreDetails.playerJokerCount`.
+function Joker.effectHandlers.conditional_multiplier_joker_count_is_exactly(jokerInstance, scoreDetails)
+    if not (jokerInstance.value and type(jokerInstance.value) == "table" and
+            jokerInstance.value.count and type(jokerInstance.value.count) == "number" and
+            jokerInstance.value.multiplier and type(jokerInstance.value.multiplier) == "number") then
+        print("Warning: Joker '" .. jokerInstance.name .. "' has invalid 'value' table. Expected {count=C, multiplier=M}.")
+        return scoreDetails
+    end
+
+    if scoreDetails.playerJokerCount == jokerInstance.value.count then
+        scoreDetails.score = scoreDetails.score * jokerInstance.value.multiplier
+        print("Applied joker '" .. jokerInstance.name .. "': score multiplied by " .. jokerInstance.value.multiplier .. " (Joker count is exactly " .. scoreDetails.playerJokerCount .. ").")
+    end
+    return scoreDetails
+end
+
+--- Conditional Flat Bonus if Played Hand has an Exact Number of Cards.
+-- Effect: Adds a flat bonus if the number of cards in the played hand is exactly a specific count.
+-- Value: (table) { cardCount = number, bonus = number }
+function Joker.effectHandlers.conditional_flat_bonus_if_card_count_is(jokerInstance, scoreDetails)
+    if not (jokerInstance.value and type(jokerInstance.value) == "table" and
+            jokerInstance.value.cardCount and type(jokerInstance.value.cardCount) == "number" and
+            jokerInstance.value.bonus and type(jokerInstance.value.bonus) == "number") then
+        print("Warning: Joker '" .. jokerInstance.name .. "' has invalid 'value' table. Expected {cardCount=CC, bonus=B}.")
+        return scoreDetails
+    end
+
+    if #scoreDetails.cards == jokerInstance.value.cardCount then
+        scoreDetails.score = scoreDetails.score + jokerInstance.value.bonus
+        print("Applied joker '" .. jokerInstance.name .. "': +" .. jokerInstance.value.bonus .. " (#cards played is " .. #scoreDetails.cards .. ").")
+    end
+    return scoreDetails
+end
+
+--- Bonus if No Shop Purchase in the Previous Round.
+-- Effect: Adds a flat bonus if no items were bought from the shop in the round preceding the current one.
+-- Value: (table) { bonus = number }
+-- Dependencies: `scoreDetails.boughtInShopLastRound`.
+function Joker.effectHandlers.bonus_if_no_shop_purchase_previous_round(jokerInstance, scoreDetails)
+    if not (jokerInstance.value and type(jokerInstance.value) == "table" and
+            jokerInstance.value.bonus and type(jokerInstance.value.bonus) == "number") then
+        print("Warning: Joker '" .. jokerInstance.name .. "' has invalid 'value' table. Expected {bonus=B}.")
+        return scoreDetails
+    end
+
+    if scoreDetails.boughtInShopLastRound == false then
+        scoreDetails.score = scoreDetails.score + jokerInstance.value.bonus
+        print("Applied joker '" .. jokerInstance.name .. "': +" .. jokerInstance.value.bonus .. " (no shop purchase last round).")
+    end
+    return scoreDetails
+end
+
+--- One-Time Ante Reducer and Self-Destruct.
+-- Effect: Signals `main.lua` to reduce the next ante by a percentage. Deactivates and marks for destruction.
+-- Value: (table) { reductionPercent = number (0.0-1.0) }
+-- Instance Fields: `apply_ante_reduction_now`, `active`, `marked_for_destruction`.
+function Joker.effectHandlers.ante_reducer_one_time_and_destroy(jokerInstance, scoreDetails)
+    if not (jokerInstance.value and type(jokerInstance.value) == "table" and
+            jokerInstance.value.reductionPercent and type(jokerInstance.value.reductionPercent) == "number") then
+        print("Warning: Joker '" .. jokerInstance.name .. "' has invalid 'value' table. Expected {reductionPercent=RP (0.0-1.0)}.")
+        return scoreDetails
+    end
+
+    if jokerInstance.active then 
+        jokerInstance.apply_ante_reduction_now = true 
+        jokerInstance.active = false 
+        jokerInstance.marked_for_destruction = true 
+        print("Joker '" .. jokerInstance.name .. "' activated: Ante reduction pending. Joker marked for destruction.")
+    end
+    return scoreDetails
+end
+
+--- Conditional Flat Bonus if Max Hand Size Meets a Threshold.
+-- Effect: Adds a flat bonus if the player's maximum hand size is at or above a minimum size.
+-- Value: (table) { minSize = number, bonus = number }
+-- Dependencies: `scoreDetails.maxHandSize`.
+function Joker.effectHandlers.conditional_flat_bonus_if_max_hand_size_is(jokerInstance, scoreDetails)
+    if not (jokerInstance.value and type(jokerInstance.value) == "table" and
+            jokerInstance.value.minSize and type(jokerInstance.value.minSize) == "number" and
+            jokerInstance.value.bonus and type(jokerInstance.value.bonus) == "number") then
+        print("Warning: Joker '" .. jokerInstance.name .. "' has invalid 'value' table. Expected {minSize=MS, bonus=B}.")
+        return scoreDetails
+    end
+
+    if scoreDetails.maxHandSize >= jokerInstance.value.minSize then
+        scoreDetails.score = scoreDetails.score + jokerInstance.value.bonus
+        print("Applied joker '" .. jokerInstance.name .. "': +" .. jokerInstance.value.bonus .. " (Max hand size " .. scoreDetails.maxHandSize .. " >= " .. jokerInstance.value.minSize .. ").")
+    end
+    return scoreDetails
+end
+
+--- Score Multiplier with Limited Uses, Then Self-Destruct.
+-- Effect: Multiplies score. Decrements uses. Marks for destruction if uses run out.
+-- Value: (table) { multiplier = number }
+-- Instance Fields: `uses_remaining`, `uses_total`, `marked_for_destruction`.
+function Joker.effectHandlers.multiplier_and_destroy_after_uses(jokerInstance, scoreDetails)
+    if not (jokerInstance.value and type(jokerInstance.value) == "table" and
+            jokerInstance.value.multiplier and type(jokerInstance.value.multiplier) == "number") then
+        print("Warning: Joker '" .. jokerInstance.name .. "' has invalid 'value' table. Expected {multiplier=M}.")
+        return scoreDetails
+    end
+
+    if jokerInstance.uses_total == -1 or jokerInstance.uses_remaining > 0 then
+        scoreDetails.score = scoreDetails.score * jokerInstance.value.multiplier
+        print("Applied joker '" .. jokerInstance.name .. "': score multiplied by " .. jokerInstance.value.multiplier)
+        
+        if jokerInstance.uses_total ~= -1 then
+            jokerInstance.uses_remaining = jokerInstance.uses_remaining - 1
+            print("Joker '" .. jokerInstance.name .. "' uses remaining: " .. jokerInstance.uses_remaining .. "/" .. jokerInstance.uses_total)
+            if jokerInstance.uses_remaining <= 0 then
+                jokerInstance.marked_for_destruction = true
+                print("Joker '" .. jokerInstance.name .. "' used up and marked for destruction.")
+            end
+        end
+    else
+        print("Joker '" .. jokerInstance.name .. "' has no uses remaining.")
+    end
+    return scoreDetails
+end
+
 
 return Joker
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of joker.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua]
+
+[end of main.lua
