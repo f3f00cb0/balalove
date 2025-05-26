@@ -208,7 +208,7 @@ HandEvaluator.handBaseScores = {
     ["No cards"] = 0 -- Handle empty hand
 }
 
-HandEvaluator.calculateScore = function(playedCards, activeJokers, currentRoundNumber) -- Added currentRoundNumber
+HandEvaluator.calculateScore = function(playedCards, activeJokers, context) -- Context table passed
     if not playedCards or #playedCards == 0 then
         return 0, "No cards"
     end
@@ -221,11 +221,18 @@ HandEvaluator.calculateScore = function(playedCards, activeJokers, currentRoundN
         currentScore = 0 -- Default to 0 if hand type has no score defined
     end
 
+    local currentContext = context or {} -- Ensure context is a table
+
     local scoreDetails = {
         score = currentScore,
         handType = handType, 
         cards = playedCards,
-        roundNumber = currentRoundNumber or 0 -- Store round number
+        roundNumber = currentContext.roundNumber or 0,
+        discardsRemaining = currentContext.discardsRemaining or 0,
+        playerHandActualSize = currentContext.playerHandActualSize or 0,
+        playerJokerCount = currentContext.playerJokerCount or 0,
+        isFirstPlay = currentContext.isFirstPlay or false,
+        isLastPlay = currentContext.isLastPlay or false
     }
 
     -- Apply Joker effects using the new handler system

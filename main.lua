@@ -61,14 +61,14 @@ function generateShopItems()
     selectedShopItemIndex = 1
     local numItemsToOffer = math.min(#availableShopJokers, math.random(2, 3))
     
-    local offeredJokerIds = {} -- To track IDs offered in this specific shop instance
+    local offeredJokerIds = {} 
     local tempAvailable = {}
     for _, jokerData in ipairs(availableShopJokers) do
         table.insert(tempAvailable, jokerData)
     end
 
     local attempts = 0
-    local maxAttemptsPerSlot = #availableShopJokers * 2 -- Heuristic to prevent long loops
+    local maxAttemptsPerSlot = #availableShopJokers * 2 
 
     for i = 1, numItemsToOffer do
         if #tempAvailable == 0 then break end 
@@ -79,14 +79,13 @@ function generateShopItems()
 
         while not foundUniqueUnowned and #tempAvailable > 0 and currentSlotAttempts < maxAttemptsPerSlot do
             local randomIndex = math.random(#tempAvailable)
-            local potentialJokerData = tempAvailable[randomIndex] -- Peek, don't remove yet
+            local potentialJokerData = tempAvailable[randomIndex] 
 
             if not playerOwnsJoker(potentialJokerData.name) and not offeredJokerIds[potentialJokerData.name] then
-                chosenJokerData = table.remove(tempAvailable, randomIndex) -- Now remove
+                chosenJokerData = table.remove(tempAvailable, randomIndex) 
                 offeredJokerIds[chosenJokerData.name] = true
                 foundUniqueUnowned = true
             else
-                -- To avoid repeatedly picking the same owned/already-offered joker, remove it from consideration for this shop instance
                 table.remove(tempAvailable, randomIndex) 
             end
             currentSlotAttempts = currentSlotAttempts + 1
@@ -96,7 +95,7 @@ function generateShopItems()
         if chosenJokerData then
             table.insert(shopItems, Joker:new(chosenJokerData.name, chosenJokerData.description, chosenJokerData.effectType, chosenJokerData.value))
         end
-        if attempts > maxAttemptsPerSlot * numItemsToOffer then -- Overall safety break
+        if attempts > maxAttemptsPerSlot * numItemsToOffer then 
              print("Warning: Max attempts reached in generateShopItems. Shop might not be full.")
              break
         end
@@ -152,61 +151,68 @@ function love.load()
     playerScore = 0 
     currentRound = 1
     targetScore = 100 
+    initialPlayerPlaysAllowed = 4 -- Define initial plays for a round
     playerDiscardsRemaining = 3
-    playerPlaysRemaining = 4
+    playerPlaysRemaining = initialPlayerPlaysAllowed -- Use the new variable
     initialHandSize = 8 
     
     handSelectedCardIndices = {} 
     stagedCards = {}             
     currentActionType = nil      
+    discardPile = {} -- Initialize discard pile
 
     playerJokers = {} 
     
+    -- Populate availableShopJokers (master list for the shop)
     table.insert(availableShopJokers, {name="Joker of Spades", description="+15 flat bonus", effectType="flat_score_bonus", value=15})
     table.insert(availableShopJokers, {name="Joker of Hearts", description="Score x1.2", effectType="score_multiplier", value=1.2})
     table.insert(availableShopJokers, {name="Joker of Clubs", description="+25 flat bonus", effectType="flat_score_bonus", value=25})
     table.insert(availableShopJokers, {name="Joker of Diamonds", description="Score x1.3", effectType="score_multiplier", value=1.3})
     table.insert(availableShopJokers, {name="Glass Joker", description="Score x2 (Fragile!)", effectType="score_multiplier", value=2.0})
     table.insert(availableShopJokers, {name="Stone Joker", description="+50 flat bonus", effectType="flat_score_bonus", value=50})
-    -- Add a few more to make testing uniqueness easier
     table.insert(availableShopJokers, {name="Golden Joker", description="Score x1.5", effectType="score_multiplier", value=1.5})
     table.insert(availableShopJokers, {name="Lucky Joker", description="+7 flat bonus", effectType="flat_score_bonus", value=7})
-
     -- Set A Jokers
-    table.insert(availableShopJokers, {
-        name = "Straight Shooter",
-        description = "Straights score an additional x2 multiplier.",
-        effectType = "hand_type_score_multiplier",
-        value = { handType = "Straight", multiplier = 2 }
-    })
+    table.insert(availableShopJokers, {name = "Straight Shooter", description = "Straights score an additional x2 multiplier.", effectType = "hand_type_score_multiplier", value = { handType = "Straight", multiplier = 2 }})
+    table.insert(availableShopJokers, {name = "Flush Fever", description = "Flushes gain a +75 flat score bonus.", effectType = "hand_type_flat_bonus", value = { handType = "Flush", bonus = 75 }})
+    table.insert(availableShopJokers, {name = "Ace High Club", description = "+15 score for each Ace in your played hand.", effectType = "rank_specific_flat_bonus_per_card", value = { rank = "A", bonusPerCard = 15 }})
+    table.insert(availableShopJokers, {name = "Lucky Number Seven", description = "Any played hand containing at least one '7' gets a +35 flat score bonus.", effectType = "conditional_flat_bonus_on_rank_present", value = { rank = "7", bonus = 35 }})
+    table.insert(availableShopJokers, {name = "Red Suit Riches", description = "Played hands containing only Red suit cards (Hearts, Diamonds) get an additional x1.5 multiplier.", effectType = "conditional_score_multiplier_all_suits_are_color", value = { color = "Red", multiplier = 1.5 }})
+    -- Set B Jokers
+    table.insert(availableShopJokers, {name = "Pair Parity", description = "Pairs: +20 if paired rank is even, +10 if odd.", effectType = "conditional_hand_type_bonus_rank_math", value = { handType = "Pair", evenBonus = 20, oddBonus = 10 }})
+    table.insert(availableShopJokers, {name = "High Roller", description = "Played hands with 3+ Face Cards (J,Q,K) get +50 score.", effectType = "conditional_flat_bonus_card_property_count", value = { property = "isFaceCard", threshold = 3, bonus = 50 }})
+    table.insert(availableShopJokers, {name = "Suit Sampler", description = "+10 score for each unique suit in the played hand.", effectType = "flat_bonus_per_unique_suit_in_played_hand", value = { bonusPerUniqueSuit = 10 }})
+    table.insert(availableShopJokers, {name = "Consecutive Bonus", description = "If played hand's ranks are consecutive, gain +25 score.", effectType = "conditional_flat_bonus_consecutive_ranks", value = { bonus = 25 }})
+    table.insert(availableShopJokers, {name = "Steady Scorer", description = "All played hands get a +10 flat score bonus.", effectType = "flat_score_bonus", value = 10})
+    table.insert(availableShopJokers, {name = "Blackjack Bonus", description = "If sum of ranks in played hand is 21 (Ace=1/11, JQK=10), score x2.", effectType = "conditional_score_multiplier_blackjack_sum", value = { targetSum = 21, multiplier = 2 }})
+    table.insert(availableShopJokers, {name = "Round Number Riches", description = "Gain flat score bonus = current round number x 3.", effectType = "flat_bonus_based_on_round_number", value = { multiplier = 3 }})
+    -- Set C Jokers
+    table.insert(availableShopJokers, {name = "Three's Company", description = "Three of a Kind scores an additional x2.5 multiplier.", effectType = "hand_type_score_multiplier", value = { handType = "ThreeOfAKind", multiplier = 2.5 }})
+    table.insert(availableShopJokers, {name = "Full House Fortune", description = "Full Houses gain a +100 flat score bonus.", effectType = "hand_type_flat_bonus", value = { handType = "FullHouse", bonus = 100 }})
+    table.insert(availableShopJokers, {name = "Royal Treatment", description = "+25 score for each King or Queen in your played hand.", effectType = "multi_rank_specific_flat_bonus_per_card", value = { ranks = {"K", "Q"}, bonusPerCard = 25 }})
+    table.insert(availableShopJokers, {name = "Even Stevens", description = "If all cards in played hand have EVEN ranks, score x2.", effectType = "conditional_score_multiplier_all_cards_property", value = { property = "isEvenRank", multiplier = 2 }})
+    table.insert(availableShopJokers, {name = "Odd Baller", description = "If all cards in played hand have ODD ranks, score x2.", effectType = "conditional_score_multiplier_all_cards_property", value = { property = "isOddRank", multiplier = 2 }})
+    table.insert(availableShopJokers, {name = "Monochrome Hand (Red)", description = "Played hands with only Red suit cards get +50 score.", effectType = "conditional_flat_bonus_all_suits_are_color", value = { color = "Red", bonus = 50 }})
+    table.insert(availableShopJokers, {name = "Monochrome Hand (Black)", description = "Played hands with only Black suit cards get +50 score.", effectType = "conditional_flat_bonus_all_suits_are_color", value = { color = "Black", bonus = 50 }})
+    table.insert(availableShopJokers, {name = "Discard Power", description = "Gain +5 score for each discard remaining on your last play.", effectType = "end_of_round_bonus_discards_remaining", value = { bonusPerDiscard = 5 }})
+    table.insert(availableShopJokers, {name = "Hand Size Bonus", description = "Gain +10 score for each card in your hand when playing.", effectType = "flat_bonus_per_card_in_current_hand_on_play", value = { bonusPerCard = 10 }})
+    table.insert(availableShopJokers, {name = "Joker Hoarder", description = "Gain +20 score for each OTHER Joker you possess.", effectType = "flat_bonus_per_other_joker_owned", value = { bonusPerJoker = 20 }})
+    table.insert(availableShopJokers, {name = "First Play Focus", description = "Your first hand played each round gets a x1.5 multiplier.", effectType = "conditional_multiplier_first_play_of_round", value = { multiplier = 1.5 }})
+    table.insert(availableShopJokers, {name = "Last Chance Saloon", description = "If this is your last play of the round, gain +75 flat bonus.", effectType = "conditional_flat_bonus_last_play_of_round", value = { bonus = 75 }})
 
-    table.insert(availableShopJokers, {
-        name = "Flush Fever",
-        description = "Flushes gain a +75 flat score bonus.",
-        effectType = "hand_type_flat_bonus",
-        value = { handType = "Flush", bonus = 75 }
-    })
-
-    table.insert(availableShopJokers, {
-        name = "Ace High Club",
-        description = "+15 score for each Ace in your played hand.",
-        effectType = "rank_specific_flat_bonus_per_card",
-        value = { rank = "A", bonusPerCard = 15 }
-    })
-
-    table.insert(availableShopJokers, {
-        name = "Lucky Number Seven",
-        description = "Any played hand containing at least one '7' gets a +35 flat score bonus.",
-        effectType = "conditional_flat_bonus_on_rank_present",
-        value = { rank = "7", bonus = 35 }
-    })
-
-    table.insert(availableShopJokers, {
-        name = "Red Suit Riches",
-        description = "Played hands containing only Red suit cards (Hearts, Diamonds) get an additional x1.5 multiplier.",
-        effectType = "conditional_score_multiplier_all_suits_are_color",
-        value = { color = "Red", multiplier = 1.5 }
-    })
+    -- Set D Jokers
+    table.insert(availableShopJokers, {name = "Fourberie", description = "Four of a Kind scores an additional x3 multiplier.", effectType = "hand_type_score_multiplier", value = { handType = "FourOfAKind", multiplier = 3 }})
+    table.insert(availableShopJokers, {name = "Straight Flush Supreme", description = "Straight Flushes gain a +250 flat score bonus.", effectType = "hand_type_flat_bonus", value = { handType = "StraightFlush", bonus = 250 }})
+    table.insert(availableShopJokers, {name = "Low Card Loyalty", description = "+5 score for each card rank 2-6 in your played hand.", effectType = "multi_rank_range_flat_bonus_per_card", value = { ranks_low = 2, ranks_high = 6, bonusPerCard = 5 }})
+    table.insert(availableShopJokers, {name = "High Card Honcho", description = "+5 score for each card rank 10-A in your played hand.", effectType = "multi_rank_range_flat_bonus_per_card", value = { ranks_low = 10, ranks_high = 14, bonusPerCard = 5 }})
+    table.insert(availableShopJokers, {name = "Perfectly Balanced", description = "If played hand has 2 Red & 2 Black cards (4+ card hands), score x2.", effectType = "conditional_score_multiplier_specific_color_counts", value = { redCount = 2, blackCount = 2, minCards = 4, multiplier = 2 }})
+    table.insert(availableShopJokers, {name = "Solo Performance", description = "If only one card is played, it scores a x5 multiplier.", effectType = "conditional_multiplier_if_card_count_is", value = { cardCount = 1, multiplier = 5 }})
+    table.insert(availableShopJokers, {name = "Empty Hand Echo", description = "If this play empties your hand, gain +50 flat bonus.", effectType = "conditional_flat_bonus_if_hand_emptied", value = { bonus = 50 }})
+    table.insert(availableShopJokers, {name = "The Minimalist", description = "If you have 0 discards remaining, all scores this round x1.5.", effectType = "conditional_multiplier_discards_remaining_is_zero", value = { multiplier = 1.5 }})
+    table.insert(availableShopJokers, {name = "The Collector", description = "Gain +1 flat score for every card in your discard pile.", effectType = "flat_bonus_per_card_in_discard_pile", value = { bonusPerCard = 1 }})
+    table.insert(availableShopJokers, {name = "Early Bird Bonus", description = "If played in Round 1 or 2, hand gets +100 flat bonus.", effectType = "conditional_flat_bonus_early_rounds", value = { maxRound = 2, bonus = 100 }})
+    table.insert(availableShopJokers, {name = "Late Game Larry", description = "If played in Round 5 or later, hand gets x2 multiplier.", effectType = "conditional_multiplier_late_rounds", value = { minRound = 5, multiplier = 2 }})
+    table.insert(availableShopJokers, {name = "Joker Synergy", description = "If you have 3 or more Jokers, all scores +25 flat bonus.", effectType = "conditional_flat_bonus_joker_count_threshold", value = { threshold = 3, bonus = 25 }})
 
 
     gameDeck = Deck:new()
@@ -323,6 +329,8 @@ function drawGameplayUI()
     love.graphics.setFont(love.graphics.newFont(20))
     love.graphics.printf("Plays: " .. playerPlaysRemaining, currentScreenWidth / 2 - 180, bottomInfoY, 100, "left")
     love.graphics.printf("Discards: " .. playerDiscardsRemaining, currentScreenWidth / 2 + 80, bottomInfoY, 100, "right")
+    love.graphics.printf("Discard Pile: " .. #discardPile, currentScreenWidth / 2, bottomInfoY + 20, 0, "center") 
+
     local buttonWidth = 160
     local buttonHeight = 40
     local buttonY = currentScreenHeight - 55 
@@ -380,16 +388,16 @@ function drawShopUI()
     else
         for i, item in ipairs(shopItems) do
             local itemText = i .. ". " .. item.name .. " - " .. item.description
-            if playerOwnsJoker(item.id) then -- Display if owned
+            if playerOwnsJoker(item.id) then 
                  itemText = itemText .. " (Owned)"
-                 love.graphics.setColor(0.6, 0.6, 0.6) -- Grey out if owned
+                 love.graphics.setColor(0.6, 0.6, 0.6) 
             elseif i == selectedShopItemIndex then
                 love.graphics.setColor(1,1,0) 
             else
                 love.graphics.setColor(1,1,1)
             end
             love.graphics.printf(itemText, 50, 120 + (i * 40), currentScreenWidth - 100, "left")
-            love.graphics.setColor(1,1,1) -- Reset color for next item
+            love.graphics.setColor(1,1,1) 
         end
     end
     love.graphics.setColor(1,1,1)
@@ -498,8 +506,20 @@ function love.keypressed(key)
                 playSound(sfxActionConfirm)
                 if currentActionType == "play" then
                     if playerPlaysRemaining > 0 then
-                        playerPlaysRemaining = playerPlaysRemaining - 1
-                        local scoreForThisHand, handType = HandEvaluator.calculateScore(stagedCards, playerJokers)
+                        
+                        local currentPlayContext = {
+                            roundNumber = currentRound,
+                            discardsRemaining = playerDiscardsRemaining,
+                            playerHandActualSize = playerHand:getCount(), 
+                            playerJokerCount = #playerJokers,
+                            isFirstPlay = (playerPlaysRemaining == initialPlayerPlaysAllowed), 
+                            isLastPlay = (playerPlaysRemaining == 1), 
+                            discardPileSize = #discardPile
+                        }
+                        
+                        playerPlaysRemaining = playerPlaysRemaining - 1 
+                        
+                        local scoreForThisHand, handType = HandEvaluator.calculateScore(stagedCards, playerJokers, currentPlayContext)
                         playerScore = playerScore + scoreForThisHand
                         print("Confirmed PLAY: " .. handType .. ", Score: " .. scoreForThisHand .. ". Round Score: " .. playerScore .. ". Plays left: " .. playerPlaysRemaining)
                         playSound(sfxCardPlay)
@@ -524,6 +544,9 @@ function love.keypressed(key)
                     if playerDiscardsRemaining > 0 then
                         playerDiscardsRemaining = playerDiscardsRemaining - 1
                         print("Confirmed DISCARD: " .. #stagedCards .. " cards. Discards left: " .. playerDiscardsRemaining)
+                        for _, card in ipairs(stagedCards) do 
+                            table.insert(discardPile, card)
+                        end
                         setUIMessage("Discarded " .. #stagedCards .. " cards. " .. playerDiscardsRemaining .. " discards left.", 3)
                         playSound(sfxDiscard)
                         refillHand() 
@@ -589,7 +612,7 @@ function love.keypressed(key)
             currentRound = currentRound + 1
             targetScore = targetScore + 50 * currentRound 
             playerScore = 0 
-            playerPlaysRemaining = 4 
+            playerPlaysRemaining = initialPlayerPlaysAllowed 
             playerDiscardsRemaining = 3 
             refillHand()
             gameState = "gameplay"
@@ -607,11 +630,12 @@ function love.keypressed(key)
         if gameState ~= "gameplay" or currentActionType ~= nil then 
             print("Starting/Resetting game from menu or F2 press...")
             playerScore = 0; currentRound = 1; targetScore = 100
-            playerDiscardsRemaining = 3; playerPlaysRemaining = 4
+            playerDiscardsRemaining = 3; playerPlaysRemaining = initialPlayerPlaysAllowed
             initialHandSize = 8
             gameDeck = Deck:new(); gameDeck:shuffle()
             playerHand = Hand:new()
             stagedCards = {}; currentActionType = nil; handSelectedCardIndices = {}
+            discardPile = {} 
             refillHand()
             setUIMessage("New game started! Select cards, then P or D.")
         end
@@ -633,15 +657,18 @@ function love.keypressed(key)
     if gameState == "gameover" and key == "r" then
         print("Resetting game from Game Over...")
         playerScore = 0; currentRound = 1; targetScore = 100
-        playerDiscardsRemaining = 3; playerPlaysRemaining = 4
+        playerDiscardsRemaining = 3; playerPlaysRemaining = initialPlayerPlaysAllowed
         initialHandSize = 8
         gameDeck = Deck:new(); gameDeck:shuffle()
         playerHand = Hand:new()
         stagedCards = {}; currentActionType = nil; handSelectedCardIndices = {}
-        playerJokers = {} -- Reset player jokers on new game
+        playerJokers = {} 
+        discardPile = {} 
         refillHand()
         setUIMessage("New game started! Select cards, then P or D.")
         gameState = "gameplay" 
         playSound(sfxRoundClear) 
     end
 end
+
+[end of main.lua]
